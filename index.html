@@ -1,1494 +1,818 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>KaiOS Web App Runner</title>
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- JSZip for in-browser .zip / .omni archive extraction -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <!-- Inter & JetBrains Mono fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'system-ui', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-          colors: {
-            canvas: '#09090b',
-            surface: '#18181b',
-            border: '#27272a',
-            accent: '#10b981',
-          }
-        }
-      }
-    };
-  </script>
-  <style>
-    * {
-      box-sizing: border-box;
-      -webkit-tap-highlight-color: transparent;
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KaiOS Web App Runner</title>
+<style>
+  :root{
+    --bg:#0a0a0c; --panel:#16171c; --line:#2a2d36;
+    --fg:#e7e8ec; --dim:#8b909c; --accent:#6fb7ff; --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,sans-serif;
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  #rig{display:flex; flex-direction:column; align-items:center; gap:16px}
 
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background-color: #09090b;
-      color: #fafafa;
-      overflow: hidden;
-      user-select: none;
-    }
+  /* ---------- the screen: exactly 240x320, no status bar, no bezel ---------- */
+  #screen{
+    position:relative; width:240px; height:320px;
+    background:#000; overflow:hidden; outline:1px solid var(--line);
+  }
+  #frame{
+    position:absolute; inset:0; width:240px; height:320px;
+    border:0; display:block; background:#000;
+  }
+  #hint{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:6px;
+    text-align:center; padding:18px; background:#000;
+    color:var(--dim); font-size:11px; pointer-events:none; line-height:1.5;
+  }
+  #hint.hidden{display:none}
+  #hint b{color:var(--fg); font-size:12px; font-weight:600; letter-spacing:.2px}
+  #hint em{font-style:normal; color:var(--accent)}
+  #hint.err b{color:var(--danger)}
 
-    /* Crisp viewport frame with zero decorative phone chrome */
-    #viewport-shell {
-      width: 240px;
-      height: 320px;
-      transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1), height 0.2s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.15s ease;
-    }
-
-    #viewport-shell.landscape {
-      width: 320px;
-      height: 240px;
-    }
-
-    #viewport-shell.drag-over {
-      border-color: #10b981;
-      background-color: rgba(16, 185, 129, 0.06);
-    }
-
-    /* Ensure iframe fills the exact 240x320 or 320x240 logical pixel canvas */
-    #app-frame {
-      width: 100%;
-      height: 100%;
-      border: 0;
-      display: block;
-      background: #000000;
-    }
-  </style>
+  /* ---------- controls (outside the screen) ---------- */
+  #controls{display:flex; gap:8px}
+  button{
+    font:inherit; font-size:12px; font-weight:500;
+    padding:7px 15px; border-radius:6px; cursor:pointer;
+    background:var(--panel); color:var(--fg);
+    border:1px solid var(--line);
+    transition:background .12s, border-color .12s, transform .06s;
+  }
+  button:hover:not(:disabled){background:#1e2027; border-color:#3a3e4a}
+  button:active:not(:disabled){transform:translateY(1px)}
+  button:disabled{opacity:.35; cursor:default}
+  button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+</style>
 </head>
-<body class="bg-canvas text-[#fafafa] font-sans flex flex-col items-center justify-center min-h-screen p-4">
+<body>
 
-  <!-- Main Centered Workspace -->
-  <main class="flex flex-col items-center justify-center gap-4 w-full max-w-md">
-
-    <!-- Unencumbered 240x320 / 320x240 Viewport -->
-    <div
-      id="viewport-shell"
-      class="relative bg-surface border border-border rounded-lg overflow-hidden shadow-2xl flex items-center justify-center"
-      tabindex="0"
-      aria-label="KaiOS Application Viewport"
-    >
-      <!-- Empty State: Interactive Drag & Drop + File Loader -->
-      <div
-        id="dropzone"
-        class="w-full h-full flex flex-col items-center justify-between p-4 text-center cursor-pointer transition-colors hover:bg-zinc-900/70"
-        role="button"
-        tabindex="0"
-        aria-label="Drop or select a KaiOS app package"
-      >
-        <div class="w-full flex items-center justify-between text-[10px] font-mono text-zinc-500">
-          <span id="dim-indicator">240×320</span>
-          <span>B2G / KAIOS</span>
-        </div>
-
-        <div class="flex flex-col items-center gap-2.5 my-auto px-2">
-          <div class="w-10 h-10 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-accent">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-          </div>
-          <div>
-            <p class="text-xs font-medium text-zinc-200 tracking-tight">Drop KaiOS Package</p>
-            <p class="text-[11px] text-zinc-500 mt-0.5 leading-snug">
-              .zip, .omni, .webapp, or .html
-            </p>
-          </div>
-          <button
-            id="btn-sample"
-            type="button"
-            class="mt-1 px-2.5 py-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-[11px] font-medium text-accent transition-colors"
-          >
-            Load Sample KaiOS App
-          </button>
-        </div>
-
-        <!-- Subtle Error / Loading Feedback inside Dropzone Only -->
-        <div id="loader-feedback" class="w-full text-[10px] font-mono text-zinc-500 truncate min-h-[14px]">
-          * LSK · # RSK · ARROWS · ENTER
-        </div>
-      </div>
-
-      <!-- Sandboxed App Iframe (100% free of status bars or overlays when active) -->
-      <iframe
-        id="app-frame"
-        class="hidden"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
-        title="KaiOS Running Application"
-      ></iframe>
+<main id="rig">
+  <div id="screen">
+    <iframe id="frame" title="App" src="about:blank" allow="autoplay; fullscreen"></iframe>
+    <div id="hint">
+      <b>No app loaded</b>
+      <span>Press <em>Load</em> and pick a<br>.zip, .omni or .html file</span>
     </div>
+  </div>
 
-    <!-- Compact 4-Button Control Strip Outside Viewport -->
-    <nav
-      aria-label="Emulator Controls"
-      class="flex items-center justify-center gap-1.5 bg-surface border border-border rounded-lg p-1.5 shadow-lg"
-    >
-      <button
-        id="btn-load"
-        type="button"
-        title="Load App Package (.zip, .omni, .html)"
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-zinc-200 hover:text-white hover:bg-zinc-800 active:bg-zinc-700 transition-colors cursor-pointer"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-accent">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-        </svg>
-        <span>Load App</span>
-      </button>
+  <div id="controls">
+    <button id="btnLoad"   type="button">Load</button>
+    <button id="btnReload" type="button" disabled>Reload</button>
+    <button id="btnEject"  type="button" disabled>Eject</button>
+  </div>
 
-      <div class="w-px h-4 bg-zinc-800"></div>
+  <input id="file" type="file" accept=".zip,.omni,.html,.htm,application/zip" hidden>
+</main>
 
-      <button
-        id="btn-reload"
-        type="button"
-        disabled
-        title="Reload Current App"
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-zinc-200 hover:text-white hover:bg-zinc-800 active:bg-zinc-700 disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="23 4 23 10 17 10"/>
-          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-        </svg>
-        <span>Reload</span>
-      </button>
-
-      <div class="w-px h-4 bg-zinc-800"></div>
-
-      <button
-        id="btn-rotate"
-        type="button"
-        title="Toggle 240x320 / 320x240 Orientation"
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-zinc-200 hover:text-white hover:bg-zinc-800 active:bg-zinc-700 transition-colors cursor-pointer"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="6" y="3" width="12" height="18" rx="2" ry="2"/>
-          <path d="M12 18h.01"/>
-        </svg>
-        <span>Rotate</span>
-      </button>
-
-      <div class="w-px h-4 bg-zinc-800"></div>
-
-      <button
-        id="btn-eject"
-        type="button"
-        disabled
-        title="Unload / Eject App"
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-zinc-200 hover:text-rose-400 hover:bg-zinc-800 active:bg-zinc-700 disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="5 15 12 6 19 15 5 15"/>
-          <line x1="5" y1="19" x2="19" y2="19"/>
-        </svg>
-        <span>Eject</span>
-      </button>
-    </nav>
-
-    <!-- Hidden File Input -->
-    <input
-      id="file-input"
-      type="file"
-      accept=".zip,.omni,.webapp,.html,.htm,application/zip,application/x-zip-compressed,text/html"
-      class="hidden"
-    />
-  </main>
-
-  <script>
-    /**
-     * KaiOS Web App Runner / Emulator
-     * Architecture:
-     * 1. PackageEngine: Unpacks .zip / .omni (including nested application.zip) or standalone .html,
-     *    parses manifest.webapp / manifest.webmanifest, builds a Virtual File System (VFS) of Blob URLs,
-     *    and rewrites relative asset references in HTML & CSS.
-     * 2. GeckoRuntimeShim: Injected at top of <head> inside the target document to polyfill KaiOS 2.5/3.0
-     *    APIs (mozApps, mozAlarms, getDeviceStorage, MozActivity/WebActivity, window.close) and intercept
-     *    fetch/XHR/Image/Audio requests to resolve against the VFS map.
-     * 3. KeypadController: Maps * -> SoftLeft, # -> SoftRight, Arrows -> D-pad, Enter -> Enter,
-     *    Backspace/Escape -> Backspace, 0-9 -> Digits, and keeps focus locked inside the active iframe.
-     */
-    (function () {
-      'use strict';
-
-      // DOM References
-      const viewportShell = document.getElementById('viewport-shell');
-      const dropzone = document.getElementById('dropzone');
-      const appFrame = document.getElementById('app-frame');
-      const fileInput = document.getElementById('file-input');
-      const loaderFeedback = document.getElementById('loader-feedback');
-      const dimIndicator = document.getElementById('dim-indicator');
-
-      const btnLoad = document.getElementById('btn-load');
-      const btnReload = document.getElementById('btn-reload');
-      const btnRotate = document.getElementById('btn-rotate');
-      const btnEject = document.getElementById('btn-eject');
-      const btnSample = document.getElementById('btn-sample');
-
-      // Runtime State
-      let currentSource = null; // { type: 'file' | 'blob', file: File|Blob, name: string }
-      let activeBlobUrls = [];
-      let isLandscape = false;
-      let isAppRunning = false;
-
-      // MIME Type Lookup Table
-      const MIME_TYPES = {
-        html: 'text/html;charset=utf-8',
-        htm: 'text/html;charset=utf-8',
-        css: 'text/css;charset=utf-8',
-        js: 'application/javascript;charset=utf-8',
-        mjs: 'application/javascript;charset=utf-8',
-        json: 'application/json;charset=utf-8',
-        webapp: 'application/x-web-app-manifest+json;charset=utf-8',
-        webmanifest: 'application/manifest+json;charset=utf-8',
-        png: 'image/png',
-        jpg: 'image/jpeg',
-        jpeg: 'image/jpeg',
-        gif: 'image/gif',
-        svg: 'image/svg+xml',
-        webp: 'image/webp',
-        ico: 'image/x-icon',
-        bmp: 'image/bmp',
-        mp3: 'audio/mpeg',
-        ogg: 'audio/ogg',
-        oga: 'audio/ogg',
-        wav: 'audio/wav',
-        m4a: 'audio/mp4',
-        aac: 'audio/aac',
-        opus: 'audio/opus',
-        mp4: 'video/mp4',
-        webm: 'video/webm',
-        woff: 'font/woff',
-        woff2: 'font/woff2',
-        ttf: 'font/ttf',
-        otf: 'font/otf',
-        eot: 'application/vnd.ms-fontobject',
-        xml: 'application/xml',
-        txt: 'text/plain;charset=utf-8',
-        wasm: 'application/wasm'
-      };
-
-      function getMimeType(filename) {
-        const clean = filename.split('?')[0].split('#')[0];
-        const ext = clean.includes('.') ? clean.split('.').pop().toLowerCase() : '';
-        return MIME_TYPES[ext] || 'application/octet-stream';
-      }
-
-      function normalizePath(path) {
-        if (!path) return '';
-        let p = path.split('?')[0].split('#')[0].trim();
-        p = p.replace(/\\/g, '/');
-        if (p.startsWith('/')) p = p.slice(1);
-        const parts = p.split('/');
-        const stack = [];
-        for (const part of parts) {
-          if (!part || part === '.') continue;
-          if (part === '..') {
-            stack.pop();
-          } else {
-            stack.push(part);
-          }
-        }
-        return stack.join('/');
-      }
-
-      function resolveRelativePath(baseFile, relUrl) {
-        if (!relUrl) return relUrl;
-        const trimmed = relUrl.trim();
-        // Ignore external protocols, data URIs, blob URIs, anchors
-        if (/^(https?:|data:|blob:|mailto:|tel:|javascript:|#)/i.test(trimmed)) {
-          return null;
-        }
-        const suffixMatch = trimmed.match(/([?#].*)$/);
-        const suffix = suffixMatch ? suffixMatch[1] : '';
-        const cleanUrl = trimmed.replace(/[?#].*$/, '');
-
-        if (cleanUrl.startsWith('/')) {
-          return { normalized: normalizePath(cleanUrl), suffix };
-        }
-        const baseDir = baseFile.includes('/') ? baseFile.substring(0, baseFile.lastIndexOf('/')) : '';
-        const combined = baseDir ? `${baseDir}/${cleanUrl}` : cleanUrl;
-        return { normalized: normalizePath(combined), suffix };
-      }
-
-      function registerBlobUrl(blob) {
-        const url = URL.createObjectURL(blob);
-        activeBlobUrls.push(url);
-        return url;
-      }
-
-      function revokeAllBlobUrls() {
-        for (const url of activeBlobUrls) {
-          try {
-            URL.revokeObjectURL(url);
-          } catch (_) {}
-        }
-        activeBlobUrls = [];
-      }
-
-      function setFeedback(msg, isError = false) {
-        loaderFeedback.textContent = msg;
-        loaderFeedback.className = isError
-          ? 'w-full text-[10px] font-mono text-rose-400 truncate min-h-[14px]'
-          : 'w-full text-[10px] font-mono text-zinc-500 truncate min-h-[14px]';
-      }
-
-      /**
-       * Generates the Gecko / B2G Compatibility Shim & Keypad/VFS Runtime
-       * injected directly into the top of the app's <head>.
-       */
-      function buildRuntimeShimScript(vfsMap, manifestData, launchPath) {
-        const serializedVfs = JSON.stringify(vfsMap);
-        const serializedManifest = JSON.stringify(manifestData || {
-          name: 'KaiOS App',
-          launch_path: '/' + launchPath,
-          version: '1.0.0'
-        });
-        const serializedLaunchPath = JSON.stringify(launchPath || 'index.html');
-
-        return `<script data-kaios-runtime="true">
-(function() {
+<script>
+(function () {
   'use strict';
-  if (window.__KAIOS_SHIM_INSTALLED__) return;
-  window.__KAIOS_SHIM_INSTALLED__ = true;
 
-  var VFS_MAP = ${serializedVfs};
-  var MANIFEST = ${serializedManifest};
-  var LAUNCH_PATH = ${serializedLaunchPath};
+  /* =====================================================================
+     DOM + state
+     ===================================================================== */
+  const frame     = document.getElementById('frame');
+  const hint      = document.getElementById('hint');
+  const btnLoad   = document.getElementById('btnLoad');
+  const btnReload = document.getElementById('btnReload');
+  const btnEject  = document.getElementById('btnEject');
+  const fileInput = document.getElementById('file');
 
-  // --- 1. Path & Virtual File Resolver ---
-  function normalizeVfsPath(raw) {
-    if (!raw || typeof raw !== 'string') return '';
-    if (/^(https?:|data:|blob:|about:|javascript:|#)/i.test(raw)) return null;
-    var clean = raw.split('?')[0].split('#')[0].replace(/\\\\/g, '/').trim();
-    if (!clean) return null;
-    if (clean.charAt(0) === '/') {
-      clean = clean.slice(1);
-    } else {
-      var baseDir = LAUNCH_PATH.indexOf('/') !== -1 ? LAUNCH_PATH.substring(0, LAUNCH_PATH.lastIndexOf('/')) : '';
-      clean = baseDir ? (baseDir + '/' + clean) : clean;
-    }
-    var parts = clean.split('/');
-    var stack = [];
-    for (var i = 0; i < parts.length; i++) {
-      var part = parts[i];
-      if (!part || part === '.') continue;
-      if (part === '..') stack.pop();
-      else stack.push(part);
-    }
-    return stack.join('/');
-  }
+  const JSZIP_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
 
-  function resolveVfsUrl(url) {
-    if (typeof url !== 'string') return url;
-    var suffixMatch = url.match(/([?#].*)$/);
-    var suffix = suffixMatch ? suffixMatch[1] : '';
-    var norm = normalizeVfsPath(url);
-    if (norm && Object.prototype.hasOwnProperty.call(VFS_MAP, norm)) {
-      return VFS_MAP[norm] + suffix;
-    }
-    // Also check direct root-relative lookup
-    var stripped = url.split('?')[0].split('#')[0].replace(/^\\.\\//, '').replace(/^\\//, '');
-    if (Object.prototype.hasOwnProperty.call(VFS_MAP, stripped)) {
-      return VFS_MAP[stripped] + suffix;
-    }
-    return url;
-  }
+  /** @type {{entryUrl:string, entryHtml:string, urls:string[], manifest:object, entryPath:string, sourceName:string}|null} */
+  let current = null;
+  let busy = false;
 
-  // Intercept fetch()
-  if (window.fetch) {
-    var origFetch = window.fetch.bind(window);
-    window.fetch = function(input, init) {
-      if (typeof input === 'string') {
-        input = resolveVfsUrl(input);
-      } else if (input && typeof Request !== 'undefined' && input instanceof Request) {
-        var resolved = resolveVfsUrl(input.url);
-        if (resolved !== input.url) {
-          input = new Request(resolved, input);
-        }
-      }
-      return origFetch(input, init);
-    };
-  }
-
-  // Intercept XMLHttpRequest.prototype.open
-  if (window.XMLHttpRequest) {
-    var origXhrOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-      var args = Array.prototype.slice.call(arguments);
-      if (typeof url === 'string') {
-        args[1] = resolveVfsUrl(url);
-      }
-      return origXhrOpen.apply(this, args);
-    };
-  }
-
-  // Intercept Image.src & HTMLImageElement.prototype.src
-  try {
-    var imgDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
-    if (imgDesc && imgDesc.set) {
-      Object.defineProperty(HTMLImageElement.prototype, 'src', {
-        get: imgDesc.get,
-        set: function(val) {
-          imgDesc.set.call(this, resolveVfsUrl(val));
-        },
-        configurable: true,
-        enumerable: true
-      });
-    }
-  } catch (e) {}
-
-  // Intercept Audio() constructor & HTMLMediaElement.prototype.src
-  if (window.Audio) {
-    var OrigAudio = window.Audio;
-    window.Audio = function(src) {
-      return new OrigAudio(src ? resolveVfsUrl(src) : undefined);
-    };
-    window.Audio.prototype = OrigAudio.prototype;
-  }
-  try {
-    var mediaDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-    if (mediaDesc && mediaDesc.set) {
-      Object.defineProperty(HTMLMediaElement.prototype, 'src', {
-        get: mediaDesc.get,
-        set: function(val) {
-          mediaDesc.set.call(this, resolveVfsUrl(val));
-        },
-        configurable: true,
-        enumerable: true
-      });
-    }
-  } catch (e) {}
-
-  // --- 2. Mock DOMRequest Helper (Gecko B2G Pattern) ---
-  function createDOMRequest(resultValue, errorValue, delayMs) {
-    var req = {
-      readyState: 'pending',
-      result: undefined,
-      error: null,
-      onsuccess: null,
-      onerror: null,
-      _listeners: { success: [], error: [] },
-      addEventListener: function(type, cb) {
-        if (this._listeners[type]) this._listeners[type].push(cb);
-      },
-      removeEventListener: function(type, cb) {
-        if (!this._listeners[type]) return;
-        this._listeners[type] = this._listeners[type].filter(function(fn) { return fn !== cb; });
-      }
-    };
-    setTimeout(function() {
-      req.readyState = 'done';
-      if (errorValue) {
-        req.error = typeof errorValue === 'string' ? { name: errorValue, message: errorValue } : errorValue;
-        var errEvt = { type: 'error', target: req };
-        if (typeof req.onerror === 'function') req.onerror(errEvt);
-        req._listeners.error.forEach(function(fn) { fn(errEvt); });
-      } else {
-        req.result = resultValue;
-        var okEvt = { type: 'success', target: req };
-        if (typeof req.onsuccess === 'function') req.onsuccess(okEvt);
-        req._listeners.success.forEach(function(fn) { fn(okEvt); });
-      }
-    }, delayMs || 5);
-    return req;
-  }
-
-  // --- 3. Gecko / KaiOS 2.5 & 3.0 API Polyfills ---
-  var appObject = {
-    manifest: MANIFEST,
-    updateManifest: null,
-    manifestURL: 'app://kaios-runner.local/manifest.webapp',
-    origin: 'app://kaios-runner.local',
-    installOrigin: 'app://kaios-runner.local',
-    installTime: Date.now(),
-    removable: true,
-    enabled: true,
-    launch: function() {},
-    checkForUpdate: function() { return createDOMRequest(false); },
-    download: function() {},
-    cancelDownload: function() {},
-    connect: function() { return Promise.resolve([]); }
+  /* =====================================================================
+     Small helpers
+     ===================================================================== */
+  const MIME = {
+    html:'text/html', htm:'text/html', js:'text/javascript', mjs:'text/javascript',
+    css:'text/css', json:'application/json', webapp:'application/json',
+    png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif',
+    svg:'image/svg+xml', webp:'image/webp', ico:'image/x-icon', bmp:'image/bmp',
+    woff:'font/woff', woff2:'font/woff2', ttf:'font/ttf', otf:'font/otf',
+    eot:'application/vnd.ms-fontobject',
+    mp3:'audio/mpeg', ogg:'audio/ogg', oga:'audio/ogg', wav:'audio/wav', m4a:'audio/mp4',
+    mp4:'video/mp4', webm:'video/webm',
+    txt:'text/plain', xml:'application/xml', vtt:'text/vtt'
   };
 
-  if (!navigator.mozApps) {
-    navigator.mozApps = {
-      getSelf: function() { return createDOMRequest(appObject); },
-      checkInstalled: function() { return createDOMRequest(appObject); },
-      getInstalled: function() { return createDOMRequest([appObject]); },
-      install: function() { return createDOMRequest(appObject); },
-      installPackage: function() { return createDOMRequest(appObject); },
-      mgmt: {
-        getAll: function() { return createDOMRequest([appObject]); },
-        getNotInstalled: function() { return createDOMRequest([]); },
-        uninstall: function() { return createDOMRequest(true); }
-      }
-    };
-  }
+  const ext      = p => { const m = /\.([a-z0-9]+)$/i.exec(p); return m ? m[1].toLowerCase() : ''; };
+  const mimeFor  = p => MIME[ext(p)] || 'application/octet-stream';
+  const dirname  = p => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i + 1); };
+  const slug     = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'runner';
 
-  var messageHandlers = {};
-  if (!navigator.mozSetMessageHandler) {
-    navigator.mozSetMessageHandler = function(type, handler) {
-      messageHandlers[type] = handler;
-    };
-  }
-  if (!navigator.mozHasPendingMessage) {
-    navigator.mozHasPendingMessage = function() {
-      return false;
-    };
-  }
-
-  // navigator.mozAlarms
-  var alarmsStore = [];
-  var nextAlarmId = 1;
-  if (!navigator.mozAlarms) {
-    navigator.mozAlarms = {
-      getAll: function() {
-        return createDOMRequest(alarmsStore.slice());
-      },
-      add: function(date, respectTimezone, data) {
-        var id = nextAlarmId++;
-        alarmsStore.push({ id: id, date: date, respectTimezone: respectTimezone, data: data || {} });
-        return createDOMRequest(id);
-      },
-      remove: function(id) {
-        alarmsStore = alarmsStore.filter(function(a) { return a.id !== id; });
-      }
-    };
-  }
-
-  // Virtual DeviceStorage backed by in-memory Map + localStorage persistence
-  var virtualStoragePools = {};
-  function getStoragePool(storageName) {
-    if (!virtualStoragePools[storageName]) {
-      virtualStoragePools[storageName] = new Map();
-      // Hydrate persisted text/json items if available
-      try {
-        var prefix = 'kaios_ds_' + storageName + ':';
-        for (var i = 0; i < localStorage.length; i++) {
-          var k = localStorage.key(i);
-          if (k && k.indexOf(prefix) === 0) {
-            var fileName = k.slice(prefix.length);
-            var raw = localStorage.getItem(k);
-            if (raw !== null) {
-              var blob = new Blob([raw], { type: 'application/octet-stream' });
-              blob.name = fileName;
-              virtualStoragePools[storageName].set(fileName, blob);
-            }
-          }
-        }
-      } catch (e) {}
+  function normalizePath(p) {
+    const out = [];
+    for (const seg of String(p).replace(/\\/g, '/').split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') out.pop();
+      else out.push(seg);
     }
-    return virtualStoragePools[storageName];
+    return out.join('/');
   }
 
-  function createDeviceStorageInstance(storageName) {
-    var pool = getStoragePool(storageName);
-    return {
-      storageName: storageName,
-      default: storageName === 'sdcard',
-      canBeFormatted: false,
-      canBeMounted: false,
-      canBeShared: true,
-      isRemovable: storageName === 'sdcard',
-      add: function(blob) {
-        var name = (blob && blob.name) ? blob.name : ('file_' + Date.now() + '.bin');
-        return this.addNamed(blob, name);
-      },
-      addNamed: function(blob, name) {
-        var cleanName = String(name).replace(/^\\/+/, '');
-        var storedBlob = blob instanceof Blob ? blob : new Blob([String(blob)], { type: 'text/plain' });
-        try { Object.defineProperty(storedBlob, 'name', { value: cleanName, configurable: true }); } catch (e) {}
-        pool.set(cleanName, storedBlob);
-        if (storedBlob.size < 262144 && storedBlob.text) {
-          storedBlob.text().then(function(txt) {
-            try { localStorage.setItem('kaios_ds_' + storageName + ':' + cleanName, txt); } catch (e) {}
-          }).catch(function() {});
-        }
-        return createDOMRequest(cleanName);
-      },
-      get: function(name) {
-        var cleanName = String(name).replace(/^\\/+/, '');
-        if (pool.has(cleanName)) {
-          return createDOMRequest(pool.get(cleanName));
-        }
-        return createDOMRequest(null, 'NotFoundError');
-      },
-      delete: function(name) {
-        var cleanName = String(name).replace(/^\\/+/, '');
-        pool.delete(cleanName);
-        try { localStorage.removeItem('kaios_ds_' + storageName + ':' + cleanName); } catch (e) {}
-        return createDOMRequest(cleanName);
-      },
-      enumerate: function(pathPrefix) {
-        var files = [];
-        pool.forEach(function(val, key) {
-          if (!pathPrefix || key.indexOf(pathPrefix) === 0) {
-            files.push(val);
-          }
-        });
-        var idx = 0;
-        var cursor = {
-          result: undefined,
-          error: null,
-          onsuccess: null,
-          onerror: null,
-          continue: function() {
-            setTimeout(function() {
-              if (idx < files.length) {
-                cursor.result = files[idx++];
-              } else {
-                cursor.result = null;
-              }
-              if (typeof cursor.onsuccess === 'function') {
-                cursor.onsuccess({ type: 'success', target: cursor });
-              }
-            }, 5);
-          }
-        };
-        cursor.continue();
-        return cursor;
-      },
-      available: function() { return createDOMRequest('available'); },
-      freeSpace: function() { return createDOMRequest(1024 * 1024 * 512); },
-      usedSpace: function() {
-        var total = 0;
-        pool.forEach(function(b) { total += (b.size || 0); });
-        return createDOMRequest(total);
-      },
-      addEventListener: function() {},
-      removeEventListener: function() {}
-    };
+  function resolvePath(baseDir, rel) {
+    let v = String(rel || '').split('#')[0].split('?')[0];
+    if (!v) return null;
+    return v.startsWith('/')
+      ? normalizePath(baseDir + v.slice(1))
+      : normalizePath(baseDir + v);
   }
 
-  if (!navigator.getDeviceStorage) {
-    navigator.getDeviceStorage = function(type) {
-      return createDeviceStorageInstance(type || 'sdcard');
-    };
-  }
-  if (!navigator.getDeviceStorages) {
-    navigator.getDeviceStorages = function(type) {
-      return [createDeviceStorageInstance(type || 'sdcard')];
-    };
+  function findCI(files, path) {
+    if (files.has(path)) return path;
+    const lower = String(path).toLowerCase();
+    for (const k of files.keys()) if (k.toLowerCase() === lower) return k;
+    return null;
   }
 
-  // MozActivity (KaiOS 2.5) & WebActivity (KaiOS 3.0)
-  function MockMozActivity(options) {
-    this.name = options && options.name ? options.name : '';
-    this.data = options && options.data ? options.data : {};
-    var req = createDOMRequest({ success: true, activity: this.name });
-    this.onsuccess = null;
-    this.onerror = null;
-    var self = this;
-    req.onsuccess = function(e) {
-      self.result = req.result;
-      if (typeof self.onsuccess === 'function') self.onsuccess(e);
-    };
-    req.onerror = function(e) {
-      self.error = req.error;
-      if (typeof self.onerror === 'function') self.onerror(e);
-    };
-  }
-  if (!window.MozActivity) {
-    window.MozActivity = MockMozActivity;
-  }
-  if (!window.WebActivity) {
-    window.WebActivity = function(name, data) {
-      this.name = name;
-      this.data = data || {};
-      this.start = function() {
-        return Promise.resolve({ success: true, activity: name });
-      };
-      this.cancel = function() {};
-    };
+  function safeJson(o) {
+    return JSON.stringify(o)
+      .replace(/</g, '\\u003c')
+      .replace(/\u2028/g, '\\u2028')
+      .replace(/\u2029/g, '\\u2029');
   }
 
-  // Additional KaiOS hardware/system stubs
-  if (!navigator.mozPower) {
-    navigator.mozPower = {
-      screenEnabled: true,
-      screenBrightness: 1.0,
-      cpuSleepAllowed: true,
-      addWakeLockListener: function() {},
-      removeWakeLockListener: function() {}
-    };
-  }
-  if (!navigator.mozSettings) {
-    navigator.mozSettings = {
-      createLock: function() {
-        return {
-          set: function() { return createDOMRequest(true); },
-          get: function(key) {
-            var res = {};
-            res[key] = null;
-            return createDOMRequest(res);
-          }
-        };
-      },
-      addObserver: function() {},
-      removeObserver: function() {}
-    };
-  }
-  if (typeof navigator.spatialNavigationEnabled === 'undefined') {
-    try { navigator.spatialNavigationEnabled = true; } catch (e) {}
-  }
+  /* =====================================================================
+     URL resolution: relative asset  ->  blob: URL
+     ===================================================================== */
+  function mapUrl(raw, dir, urls, baseDir) {
+    if (!raw) return null;
+    let v = String(raw).trim();
+    if (!v) return null;
+    // leave absolute / external / data / anchor references alone
+    if (/^(?:[a-z][a-z0-9+.\-]*:|\/\/|#)/i.test(v)) return null;
 
-  // Polyfill window.close() -> cleanly unload app back to host file loader
-  window.close = function() {
+    v = v.split('#')[0].split('?')[0];
+    if (!v) return null;
+
+    const path = v.startsWith('/')
+      ? normalizePath(baseDir + v.slice(1))
+      : normalizePath(dir + v);
+
+    const candidates = [path];
     try {
-      window.parent.postMessage({ type: 'KAIOS_APP_CLOSE' }, '*');
-    } catch (e) {}
-  };
+      const decoded = decodeURIComponent(path);
+      if (decoded !== path) candidates.push(decoded);
+    } catch (e) { /* malformed escape — ignore */ }
 
-  // --- 4. Inner Keypad Normalization & Focus Guard ---
-  function mapKaiOSKey(e) {
-    // Already mapped synthetic KaiOS event
-    if (e.__kaiosMapped) return null;
-
-    var key = e.key;
-    var code = e.code;
-
-    // * -> SoftLeft (LSK)
-    if (key === '*' || code === 'NumpadMultiply' || (e.shiftKey && code === 'Digit8') || key === 'F1') {
-      return { key: 'SoftLeft', code: 'SoftLeft', keyCode: 0 };
-    }
-    // # -> SoftRight (RSK)
-    if (key === '#' || (e.shiftKey && code === 'Digit3') || key === 'F2') {
-      return { key: 'SoftRight', code: 'SoftRight', keyCode: 0 };
-    }
-    // Escape -> Backspace (KaiOS Back key)
-    if (key === 'Escape') {
-      return { key: 'Backspace', code: 'Backspace', keyCode: 8 };
+    for (const c of candidates) {
+      const u = urls.get(c);
+      if (u) return u;
     }
     return null;
   }
 
-  function handleInnerKey(e) {
-    // Prevent browser defaults like Backspace navigating back or Arrow keys scrolling outer frame
-    if (e.key === 'Backspace' || e.key === 'Escape' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      var activeTag = document.activeElement ? document.activeElement.tagName : '';
-      var isTextInput = (activeTag === 'INPUT' || activeTag === 'TEXTAREA') && e.key === 'Backspace';
-      if (!isTextInput) {
-        e.preventDefault();
-      }
-    }
-
-    var mapped = mapKaiOSKey(e);
-    if (mapped) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      var target = document.activeElement || document.body || window;
-      var synth = new KeyboardEvent(e.type, {
-        key: mapped.key,
-        code: mapped.code,
-        keyCode: mapped.keyCode,
-        which: mapped.keyCode,
-        bubbles: true,
-        cancelable: true
-      });
-      try { Object.defineProperty(synth, '__kaiosMapped', { value: true }); } catch (_) {}
-      target.dispatchEvent(synth);
-    }
+  function rewriteCss(text, dir, urls, baseDir) {
+    if (!text) return text;
+    text = text.replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi, (m, q, raw) => {
+      const u = mapUrl(raw, dir, urls, baseDir);
+      return u ? 'url("' + u + '")' : m;
+    });
+    text = text.replace(/@import\s+(['"])([^'"]+)\1/gi, (m, q, raw) => {
+      const u = mapUrl(raw, dir, urls, baseDir);
+      return u ? '@import url("' + u + '")' : m;
+    });
+    return text;
   }
 
-  window.addEventListener('keydown', handleInnerKey, true);
-  window.addEventListener('keyup', handleInnerKey, true);
+  function rewriteHtml(text, dir, urls, baseDir, appInfo) {
+    const doc = new DOMParser().parseFromString(text, 'text/html');
 
-  // Receive forwarded key events from host window when focus was outside iframe
-  window.addEventListener('message', function(evt) {
-    if (!evt.data || evt.data.type !== 'KAIOS_FORWARD_KEY') return;
-    var payload = evt.data.payload;
-    var target = document.activeElement || document.body || document.documentElement || window;
-    var synth = new KeyboardEvent(payload.eventType, {
-      key: payload.key,
-      code: payload.code,
-      keyCode: payload.keyCode || 0,
-      which: payload.keyCode || 0,
-      bubbles: true,
-      cancelable: true
-    });
-    try { Object.defineProperty(synth, '__kaiosMapped', { value: true }); } catch (_) {}
-    target.dispatchEvent(synth);
-  });
+    // a <base> would defeat every rewrite below
+    doc.querySelectorAll('base').forEach(el => el.remove());
 
-  window.addEventListener('DOMContentLoaded', function() {
-    if (document.body) {
-      document.body.setAttribute('tabindex', '-1');
-      document.body.focus({ preventScroll: true });
-    }
-  });
-})();
-<\/script>`;
-      }
+    const targets = [
+      ['img', 'src'],       ['img', 'srcset'],
+      ['script', 'src'],    ['link', 'href'],
+      ['source', 'src'],    ['source', 'srcset'],
+      ['audio', 'src'],     ['video', 'src'],   ['video', 'poster'],
+      ['track', 'src'],     ['embed', 'src'],   ['object', 'data'],
+      ['input', 'src'],
+      ['use', 'href'],      ['use', 'xlink:href'],
+      ['image', 'href'],    ['image', 'xlink:href']
+    ];
 
-      /**
-       * Rewrites relative url(...) inside CSS files to Blob URLs
-       */
-      function rewriteCssUrls(cssText, cssFilePath, vfsMap) {
-        return cssText.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (match, quote, rawUrl) => {
-          const resolved = resolveRelativePath(cssFilePath, rawUrl);
-          if (!resolved) return match;
-          const blobUrl = vfsMap[resolved.normalized];
-          if (!blobUrl) return match;
-          return `url(${quote}${blobUrl}${resolved.suffix}${quote})`;
-        });
-      }
+    for (const [sel, attr] of targets) {
+      doc.querySelectorAll(sel).forEach(el => {
+        const raw = el.getAttribute(attr);
+        if (!raw) return;
 
-      /**
-       * Rewrites relative src, href, poster, and inline style url(...) inside HTML documents,
-       * and injects the Gecko/B2G runtime shim at the top of <head>.
-       */
-      function rewriteHtmlAndInjectShim(htmlText, htmlFilePath, vfsMap, manifestData, launchPath) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(htmlText, 'text/html');
-
-        // Rewrite src attributes (script, img, audio, video, source, iframe, track, embed)
-        doc.querySelectorAll('[src]').forEach((el) => {
-          const raw = el.getAttribute('src');
-          const resolved = resolveRelativePath(htmlFilePath, raw);
-          if (resolved && vfsMap[resolved.normalized]) {
-            el.setAttribute('src', vfsMap[resolved.normalized] + resolved.suffix);
-          }
-        });
-
-        // Rewrite href attributes (link[rel=stylesheet], link[rel=icon], a, etc.)
-        doc.querySelectorAll('[href]').forEach((el) => {
-          const raw = el.getAttribute('href');
-          const resolved = resolveRelativePath(htmlFilePath, raw);
-          if (resolved && vfsMap[resolved.normalized]) {
-            el.setAttribute('href', vfsMap[resolved.normalized] + resolved.suffix);
-          }
-        });
-
-        // Rewrite poster attributes on video tags
-        doc.querySelectorAll('[poster]').forEach((el) => {
-          const raw = el.getAttribute('poster');
-          const resolved = resolveRelativePath(htmlFilePath, raw);
-          if (resolved && vfsMap[resolved.normalized]) {
-            el.setAttribute('poster', vfsMap[resolved.normalized] + resolved.suffix);
-          }
-        });
-
-        // Rewrite inline <style> blocks
-        doc.querySelectorAll('style').forEach((styleEl) => {
-          styleEl.textContent = rewriteCssUrls(styleEl.textContent || '', htmlFilePath, vfsMap);
-        });
-
-        // Rewrite inline style="" attributes
-        doc.querySelectorAll('[style]').forEach((el) => {
-          const inlineStyle = el.getAttribute('style');
-          if (inlineStyle && inlineStyle.includes('url(')) {
-            el.setAttribute('style', rewriteCssUrls(inlineStyle, htmlFilePath, vfsMap));
-          }
-        });
-
-        // Ensure viewport meta tag matches 240x320 / 320x240 cleanly
-        if (!doc.querySelector('meta[name="viewport"]')) {
-          const meta = doc.createElement('meta');
-          meta.setAttribute('name', 'viewport');
-          meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
-          doc.head.insertBefore(meta, doc.head.firstChild);
-        }
-
-        // Serialize modified HTML and inject runtime shim at the very start of <head>
-        const shimScript = buildRuntimeShimScript(vfsMap, manifestData, launchPath);
-        let serialized = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-
-        if (/<head[^>]*>/i.test(serialized)) {
-          serialized = serialized.replace(/<head([^>]*)>/i, `<head$1>\n${shimScript}`);
-        } else {
-          serialized = shimScript + '\n' + serialized;
-        }
-
-        return serialized;
-      }
-
-      /**
-       * Unpacks a .zip / .omni archive or standalone .html file and mounts it into #app-frame
-       */
-      async function loadPackageSource(fileOrBlob, fileName) {
-        try {
-          setFeedback('Unpacking ' + fileName + '...');
-          revokeAllBlobUrls();
-
-          const lowerName = fileName.toLowerCase();
-
-          // Case A: Standalone HTML file
-          if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
-            const htmlText = await fileOrBlob.text();
-            const manifest = { name: fileName.replace(/\.(html|htm)$/i, ''), launch_path: '/index.html' };
-            const processedHtml = rewriteHtmlAndInjectShim(htmlText, 'index.html', {}, manifest, 'index.html');
-            const entryBlob = new Blob([processedHtml], { type: 'text/html;charset=utf-8' });
-            const entryUrl = registerBlobUrl(entryBlob);
-
-            mountApp(entryUrl, { type: 'file', file: fileOrBlob, name: fileName });
-            return;
-          }
-
-          // Case B: .zip / .omni / .webapp archive
-          if (typeof JSZip === 'undefined') {
-            throw new Error('JSZip failed to load.');
-          }
-
-          let zip = await JSZip.loadAsync(fileOrBlob);
-
-          // Support .omni packages that wrap the actual app inside a nested `application.zip`
-          const nestedAppZip = zip.file(/^application\.zip$/i)[0];
-          if (nestedAppZip && !zip.file(/(^|\/)manifest\.(webapp|webmanifest)$/i).length) {
-            const innerBuffer = await nestedAppZip.async('arraybuffer');
-            zip = await JSZip.loadAsync(innerBuffer);
-          }
-
-          // Collect all non-directory files
-          const entries = {};
-          const filePromises = [];
-
-          zip.forEach((relativePath, zipEntry) => {
-            if (zipEntry.dir) return;
-            const norm = normalizePath(relativePath);
-            if (!norm) return;
-            filePromises.push(
-              zipEntry.async('uint8array').then((bytes) => {
-                entries[norm] = bytes;
-              })
-            );
-          });
-
-          await Promise.all(filePromises);
-
-          const allPaths = Object.keys(entries);
-          if (allPaths.length === 0) {
-            throw new Error('Archive is empty.');
-          }
-
-          // Strip common top-level wrapper folder if every file sits inside a single root folder
-          let rootPrefix = '';
-          const topSegments = new Set(allPaths.map((p) => p.split('/')[0]));
-          if (topSegments.size === 1 && allPaths.every((p) => p.includes('/'))) {
-            rootPrefix = Array.from(topSegments)[0] + '/';
-          }
-
-          const normalizedFiles = {};
-          for (const p of allPaths) {
-            const clean = rootPrefix ? p.slice(rootPrefix.length) : p;
-            if (clean) normalizedFiles[clean] = entries[p];
-          }
-
-          // Parse manifest.webapp or manifest.webmanifest
-          let manifestData = null;
-          let launchPath = 'index.html';
-          const manifestPath = Object.keys(normalizedFiles).find((p) =>
-            /^(manifest\.webapp|manifest\.webmanifest)$/i.test(p)
-          );
-
-          if (manifestPath) {
-            try {
-              const decoder = new TextDecoder('utf-8');
-              manifestData = JSON.parse(decoder.decode(normalizedFiles[manifestPath]));
-              const rawLaunch = manifestData.launch_path || manifestData.start_url;
-              if (rawLaunch) {
-                launchPath = normalizePath(rawLaunch);
-              }
-            } catch (e) {
-              console.warn('Manifest parse warning:', e);
-            }
-          }
-
-          // Fallback to index.html if specified launch_path isn't found
-          if (!normalizedFiles[launchPath]) {
-            const fallbackHtml = Object.keys(normalizedFiles).find((p) => /^index\.html?$/i.test(p))
-              || Object.keys(normalizedFiles).find((p) => /\.html?$/i.test(p));
-            if (!fallbackHtml) {
-              throw new Error('No launch_path or HTML entry found.');
-            }
-            launchPath = fallbackHtml;
-          }
-
-          // Pass 1: Create Blob URLs for all binary/non-HTML/non-CSS assets first
-          const vfsMap = {};
-          const decoder = new TextDecoder('utf-8');
-          const cssPaths = [];
-          const htmlPaths = [];
-
-          for (const [path, bytes] of Object.entries(normalizedFiles)) {
-            const lower = path.toLowerCase();
-            if (lower.endsWith('.css')) {
-              cssPaths.push(path);
-            } else if (lower.endsWith('.html') || lower.endsWith('.htm')) {
-              htmlPaths.push(path);
-            } else {
-              const blob = new Blob([bytes], { type: getMimeType(path) });
-              vfsMap[path] = registerBlobUrl(blob);
-            }
-          }
-
-          // Pass 2: Rewrite relative url(...) inside CSS files and create their Blob URLs
-          for (const cssPath of cssPaths) {
-            const rawCss = decoder.decode(normalizedFiles[cssPath]);
-            const rewrittenCss = rewriteCssUrls(rawCss, cssPath, vfsMap);
-            const blob = new Blob([rewrittenCss], { type: 'text/css;charset=utf-8' });
-            vfsMap[cssPath] = registerBlobUrl(blob);
-          }
-
-          // Pass 3: Rewrite HTML files & inject the Gecko/KaiOS runtime shim
-          for (const htmlPath of htmlPaths) {
-            const rawHtml = decoder.decode(normalizedFiles[htmlPath]);
-            const rewrittenHtml = rewriteHtmlAndInjectShim(
-              rawHtml,
-              htmlPath,
-              vfsMap,
-              manifestData,
-              htmlPath
-            );
-            const blob = new Blob([rewrittenHtml], { type: 'text/html;charset=utf-8' });
-            vfsMap[htmlPath] = registerBlobUrl(blob);
-          }
-
-          const entryUrl = vfsMap[launchPath];
-          if (!entryUrl) {
-            throw new Error('Failed to resolve entry document.');
-          }
-
-          mountApp(entryUrl, { type: 'file', file: fileOrBlob, name: fileName });
-        } catch (err) {
-          console.error(err);
-          setFeedback(err.message || 'Failed to load package.', true);
-        }
-      }
-
-      function mountApp(entryUrl, sourceMeta) {
-        currentSource = sourceMeta;
-        isAppRunning = true;
-
-        dropzone.classList.add('hidden');
-        appFrame.classList.remove('hidden');
-        appFrame.src = entryUrl;
-
-        btnReload.disabled = false;
-        btnEject.disabled = false;
-        setFeedback('* LSK · # RSK · ARROWS · ENTER');
-
-        appFrame.onload = () => {
-          focusAppViewport();
-        };
-        focusAppViewport();
-      }
-
-      function unloadApp() {
-        isAppRunning = false;
-        appFrame.src = 'about:blank';
-        appFrame.classList.add('hidden');
-        dropzone.classList.remove('hidden');
-
-        revokeAllBlobUrls();
-        btnReload.disabled = true;
-        btnEject.disabled = true;
-        fileInput.value = '';
-        setFeedback('* LSK · # RSK · ARROWS · ENTER');
-        viewportShell.focus();
-      }
-
-      function focusAppViewport() {
-        if (!isAppRunning) return;
-        try {
-          appFrame.focus();
-          if (appFrame.contentWindow) {
-            appFrame.contentWindow.focus();
-            if (appFrame.contentDocument && appFrame.contentDocument.body) {
-              appFrame.contentDocument.body.focus({ preventScroll: true });
-            }
-          }
-        } catch (_) {}
-      }
-
-      // --- Orientation Toggle (240x320 <-> 320x240) ---
-      btnRotate.addEventListener('click', () => {
-        isLandscape = !isLandscape;
-        viewportShell.classList.toggle('landscape', isLandscape);
-        dimIndicator.textContent = isLandscape ? '320×240' : '240×320';
-        if (isAppRunning) {
-          focusAppViewport();
-        }
-      });
-
-      // --- Control Strip Actions ---
-      btnLoad.addEventListener('click', () => {
-        fileInput.click();
-      });
-
-      btnReload.addEventListener('click', () => {
-        if (currentSource && currentSource.file) {
-          loadPackageSource(currentSource.file, currentSource.name);
-        }
-      });
-
-      btnEject.addEventListener('click', () => {
-        unloadApp();
-      });
-
-      // --- Dropzone Click & Drag-and-Drop ---
-      dropzone.addEventListener('click', (e) => {
-        if (e.target === btnSample || btnSample.contains(e.target)) return;
-        fileInput.click();
-      });
-
-      dropzone.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          fileInput.click();
-        }
-      });
-
-      fileInput.addEventListener('change', (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (file) {
-          loadPackageSource(file, file.name);
-        }
-      });
-
-      ['dragenter', 'dragover'].forEach((evtName) => {
-        viewportShell.addEventListener(evtName, (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          viewportShell.classList.add('drag-over');
-        });
-      });
-
-      ['dragleave', 'drop'].forEach((evtName) => {
-        viewportShell.addEventListener(evtName, (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          viewportShell.classList.remove('drag-over');
-        });
-      });
-
-      viewportShell.addEventListener('drop', (e) => {
-        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-        if (file) {
-          loadPackageSource(file, file.name);
-        }
-      });
-
-      // Listen for window.close() from inside the KaiOS app
-      window.addEventListener('message', (e) => {
-        if (e.data && e.data.type === 'KAIOS_APP_CLOSE' && isAppRunning) {
-          unloadApp();
-        }
-      });
-
-      // --- Outer Keypad Interceptor & Focus Lock ---
-      function translateOuterKey(e) {
-        const key = e.key;
-        const code = e.code;
-
-        // * -> SoftLeft (LSK)
-        if (key === '*' || code === 'NumpadMultiply' || (e.shiftKey && code === 'Digit8') || key === 'F1') {
-          return { key: 'SoftLeft', code: 'SoftLeft', keyCode: 0 };
-        }
-        // # -> SoftRight (RSK)
-        if (key === '#' || (e.shiftKey && code === 'Digit3') || key === 'F2') {
-          return { key: 'SoftRight', code: 'SoftRight', keyCode: 0 };
-        }
-        // D-pad Arrows
-        if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight') {
-          const map = { ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39 };
-          return { key, code: key, keyCode: map[key] };
-        }
-        // Enter -> Center / Select
-        if (key === 'Enter') {
-          return { key: 'Enter', code: 'Enter', keyCode: 13 };
-        }
-        // Backspace / Escape -> Back
-        if (key === 'Backspace' || key === 'Escape') {
-          return { key: 'Backspace', code: 'Backspace', keyCode: 8 };
-        }
-        // Number keys 0-9
-        if (/^[0-9]$/.test(key)) {
-          return { key, code: 'Digit' + key, keyCode: 48 + Number(key) };
-        }
-        return null;
-      }
-
-      function forwardKeyToRunningApp(e) {
-        if (!isAppRunning) return;
-
-        // Keep keyboard focus locked inside the running app
-        if (document.activeElement !== appFrame) {
-          focusAppViewport();
-        }
-
-        const mapped = translateOuterKey(e);
-        if (!mapped) return;
-
-        // Prevent outer browser shortcuts (Backspace back-nav, Space/Arrows scroll, Quick Find '/')
-        e.preventDefault();
-        e.stopPropagation();
-
-        // If focus was outside the iframe, forward the key event into the iframe via postMessage
-        if (document.activeElement !== appFrame && appFrame.contentWindow) {
-          appFrame.contentWindow.postMessage({
-            type: 'KAIOS_FORWARD_KEY',
-            payload: {
-              eventType: e.type,
-              key: mapped.key,
-              code: mapped.code,
-              keyCode: mapped.keyCode
-            }
-          }, '*');
-        }
-      }
-
-      window.addEventListener('keydown', forwardKeyToRunningApp, true);
-      window.addEventListener('keyup', forwardKeyToRunningApp, true);
-
-      // Re-lock focus into iframe when user clicks anywhere on the viewport
-      viewportShell.addEventListener('mousedown', () => {
-        if (isAppRunning) {
-          setTimeout(focusAppViewport, 0);
-        }
-      });
-
-      // --- Built-in Sample KaiOS App Generator (runs through real JSZip + VFS pipeline) ---
-      btnSample.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (typeof JSZip === 'undefined') {
-          setFeedback('JSZip unavailable.', true);
+        if (attr === 'srcset') {
+          el.setAttribute(attr, raw.split(',').map(part => {
+            const bits = part.trim().split(/\s+/);
+            const u = mapUrl(bits[0], dir, urls, baseDir);
+            if (u) bits[0] = u;
+            return bits.join(' ');
+          }).join(', '));
           return;
         }
 
-        const sampleZip = new JSZip();
-
-        sampleZip.file('manifest.webapp', JSON.stringify({
-          name: 'KaiOS Keypad Test',
-          description: 'Interactive KaiOS D-pad, Softkey & B2G API tester',
-          version: '1.0.0',
-          launch_path: '/index.html',
-          developer: { name: 'KaiOS Runner' },
-          permissions: {
-            'device-storage:sdcard': { access: 'readwrite' }
-          }
-        }, null, 2));
-
-        sampleZip.file('app.css', `
-          * { box-sizing: border-box; margin: 0; padding: 0; }
-          html, body {
-            width: 100%;
-            height: 100%;
-            background: #09090b;
-            color: #fafafa;
-            font-family: system-ui, -apple-system, sans-serif;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-          }
-          header {
-            background: #10b981;
-            color: #052e16;
-            font-weight: 700;
-            font-size: 13px;
-            padding: 6px 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          main {
-            flex: 1;
-            overflow-y: auto;
-            padding: 6px;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-          }
-          .item {
-            padding: 7px 9px;
-            border-radius: 5px;
-            background: #18181b;
-            border: 1px solid #27272a;
-            font-size: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          .item.focused {
-            background: #10b981;
-            color: #052e16;
-            border-color: #34d399;
-            font-weight: 600;
-          }
-          .badge {
-            font-family: monospace;
-            font-size: 11px;
-            opacity: 0.85;
-          }
-          .log-box {
-            margin-top: auto;
-            padding: 6px 8px;
-            background: #121215;
-            border: 1px solid #27272a;
-            border-radius: 5px;
-            font-family: monospace;
-            font-size: 11px;
-            color: #a1a1aa;
-            line-height: 1.35;
-          }
-          footer {
-            height: 26px;
-            background: #18181b;
-            border-top: 1px solid #27272a;
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            align-items: center;
-            padding: 0 8px;
-            font-size: 11px;
-            font-weight: 600;
-          }
-          .lsk { text-align: left; color: #34d399; }
-          .csk { text-align: center; text-transform: uppercase; color: #fafafa; }
-          .rsk { text-align: right; color: #f87171; }
-        `);
-
-        sampleZip.file('index.html', `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>KaiOS Sample App</title>
-  <link rel="stylesheet" href="app.css" />
-</head>
-<body>
-  <header>
-    <span id="app-title">KaiOS Demo</span>
-    <span id="dial-buf" style="font-family:monospace;">#</span>
-  </header>
-  <main id="menu-list">
-    <div class="item focused" data-action="mozapps">
-      <span>1. Test mozApps.getSelf()</span>
-      <span class="badge">API</span>
-    </div>
-    <div class="item" data-action="storage">
-      <span>2. Test DeviceStorage</span>
-      <span class="badge">SD</span>
-    </div>
-    <div class="item" data-action="activity">
-      <span>3. Fire MozActivity</span>
-      <span class="badge">ACT</span>
-    </div>
-    <div class="item" data-action="exit">
-      <span>4. Exit (window.close)</span>
-      <span class="badge">END</span>
-    </div>
-    <div class="log-box" id="status-log">
-      Use Arrows, Enter, * (LSK), # (RSK), or 0-9 keys.
-    </div>
-  </main>
-  <footer>
-    <span class="lsk" id="lsk-label">Clear</span>
-    <span class="csk">Select</span>
-    <span class="rsk" id="rsk-label">Exit</span>
-  </footer>
-  <script src="app.js"><\/script>
-</body>
-</html>`);
-
-        sampleZip.file('app.js', `
-          (function() {
-            var items = Array.prototype.slice.call(document.querySelectorAll('.item'));
-            var logEl = document.getElementById('status-log');
-            var dialEl = document.getElementById('dial-buf');
-            var titleEl = document.getElementById('app-title');
-            var selectedIdx = 0;
-            var digits = '';
-
-            if (navigator.mozApps) {
-              var req = navigator.mozApps.getSelf();
-              req.onsuccess = function() {
-                if (req.result && req.result.manifest) {
-                  titleEl.textContent = req.result.manifest.name;
-                }
-              };
-            }
-
-            function renderSelection() {
-              items.forEach(function(el, i) {
-                el.classList.toggle('focused', i === selectedIdx);
-              });
-            }
-
-            function runAction(action) {
-              if (action === 'mozapps') {
-                var r = navigator.mozApps.getSelf();
-                r.onsuccess = function() {
-                  logEl.textContent = 'mozApps OK: ' + r.result.manifest.name + ' v' + r.result.manifest.version;
-                };
-              } else if (action === 'storage') {
-                var sd = navigator.getDeviceStorage('sdcard');
-                var file = new Blob(['kaios-test-' + Date.now()], { type: 'text/plain' });
-                var w = sd.addNamed(file, 'probe.txt');
-                w.onsuccess = function() {
-                  logEl.textContent = 'SD Saved: ' + w.result;
-                };
-              } else if (action === 'activity') {
-                var act = new MozActivity({ name: 'share', data: { type: 'text/plain' } });
-                act.onsuccess = function() {
-                  logEl.textContent = 'MozActivity resolved!';
-                };
-              } else if (action === 'exit') {
-                window.close();
-              }
-            }
-
-            window.addEventListener('keydown', function(e) {
-              if (e.key === 'ArrowDown') {
-                selectedIdx = (selectedIdx + 1) % items.length;
-                renderSelection();
-              } else if (e.key === 'ArrowUp') {
-                selectedIdx = (selectedIdx - 1 + items.length) % items.length;
-                renderSelection();
-              } else if (e.key === 'Enter') {
-                runAction(items[selectedIdx].getAttribute('data-action'));
-              } else if (e.key === 'SoftLeft') {
-                digits = '';
-                dialEl.textContent = '#';
-                logEl.textContent = 'LSK (SoftLeft) pressed — Cleared';
-              } else if (e.key === 'SoftRight') {
-                logEl.textContent = 'RSK (SoftRight) pressed — Closing...';
-                setTimeout(function() { window.close(); }, 250);
-              } else if (e.key === 'Backspace') {
-                if (digits.length > 0) {
-                  digits = digits.slice(0, -1);
-                  dialEl.textContent = digits || '#';
-                } else {
-                  logEl.textContent = 'Back key pressed';
-                }
-              } else if (/^[0-9]$/.test(e.key)) {
-                digits = (digits + e.key).slice(-8);
-                dialEl.textContent = digits;
-                logEl.textContent = 'Key ' + e.key + ' pressed';
-              }
-            });
-          })();
-        `);
-
-        const zipBlob = await sampleZip.generateAsync({ type: 'blob' });
-        loadPackageSource(zipBlob, 'kaios-sample-app.zip');
+        const u = mapUrl(raw, dir, urls, baseDir);
+        if (u) el.setAttribute(attr, u);
       });
-    })();
-  </script>
+    }
+
+    // inline + embedded CSS
+    doc.querySelectorAll('style').forEach(el => {
+      el.textContent = rewriteCss(el.textContent, dir, urls, baseDir);
+    });
+    doc.querySelectorAll('[style]').forEach(el => {
+      el.setAttribute('style', rewriteCss(el.getAttribute('style'), dir, urls, baseDir));
+    });
+
+    /* ---- inject the KaiOS shim FIRST so it precedes every app script ---- */
+    if (appInfo) {
+      const head = doc.head || doc.documentElement;
+      const nodes = [];
+
+      const meta = doc.createElement('meta');
+      meta.setAttribute('charset', 'utf-8');
+      nodes.push(meta);
+
+      const info = doc.createElement('script');
+      info.textContent = 'window.__KAIOS_APP__=' + safeJson(appInfo) + ';';
+      nodes.push(info);
+
+      const shim = doc.createElement('script');
+      shim.textContent = '(' + kaiosShim.toString() + ')();';
+      nodes.push(shim);
+
+      const ref = head.firstChild;
+      for (const n of nodes) head.insertBefore(n, ref);
+    }
+
+    const doctype = doc.doctype ? '<!DOCTYPE ' + doc.doctype.name + '>' : '<!DOCTYPE html>';
+    return doctype + '\n' + doc.documentElement.outerHTML;
+  }
+
+  /* =====================================================================
+     THE SHIM — stringified and injected before app scripts.
+     Must be fully self-contained (no closures over host variables).
+     ===================================================================== */
+  function kaiosShim() {
+    var W = window;
+    var INFO = W.__KAIOS_APP__ ||
+      { manifest: {}, manifestURL: 'app://runner/manifest.webapp', origin: 'app://runner' };
+
+    function post(m) { try { parent.postMessage(m, '*'); } catch (e) {} }
+    function defer(fn) { setTimeout(fn, 0); }
+
+    /* ---------------- DOMRequest ---------------- */
+    function mkRequest() {
+      var r = {
+        result: undefined, error: null, readyState: 'pending',
+        onsuccess: null, onerror: null, _h: {},
+        addEventListener: function (t, f) { (r._h[t] = r._h[t] || []).push(f); },
+        removeEventListener: function (t, f) {
+          var a = r._h[t]; if (!a) return;
+          var i = a.indexOf(f); if (i >= 0) a.splice(i, 1);
+        }
+      };
+      r._fire = function (type) {
+        var ev = { type: type, target: r };
+        var h = r['on' + type];
+        if (typeof h === 'function') { try { h.call(r, ev); } catch (e) { console.error(e); } }
+        var a = (r._h[type] || []).slice();
+        for (var i = 0; i < a.length; i++) {
+          try { a[i].call(r, ev); } catch (e) { console.error(e); }
+        }
+      };
+      return r;
+    }
+    function ok(r, v) { defer(function () { r.readyState = 'done'; r.result = v; r._fire('success'); }); return r; }
+    function fail(r, e) {
+      defer(function () {
+        r.readyState = 'done';
+        r.error = e || { name: 'UnknownError', message: '' };
+        r._fire('error');
+      });
+      return r;
+    }
+
+    /* ---------------- DOMCursor ---------------- */
+    function mkCursor(items) {
+      var i = 0;
+      var c = {
+        done: false, result: null, onsuccess: null, onerror: null, _h: {},
+        addEventListener: function (t, f) { (c._h[t] = c._h[t] || []).push(f); },
+        removeEventListener: function () {},
+        'continue': function () {
+          defer(function () {
+            if (i >= items.length) { c.done = true; c.result = null; }
+            else { c.result = items[i++]; }
+            var ev = { type: 'success', target: c };
+            if (typeof c.onsuccess === 'function') { try { c.onsuccess(ev); } catch (e) { console.error(e); } }
+            var a = (c._h.success || []).slice();
+            for (var k = 0; k < a.length; k++) { try { a[k](ev); } catch (e) {} }
+          });
+        }
+      };
+      return c;
+    }
+
+    /* ---------------- navigator.mozApps ---------------- */
+    function KaiApp(manifest, manifestURL, origin) {
+      this.manifest = manifest || {};
+      this.manifestURL = manifestURL;
+      this.origin = origin;
+      this.installOrigin = origin;
+      this.installTime = Date.now();
+      this.appStatus = 1;
+      this.receipts = [];
+    }
+    KaiApp.prototype.launch = function () { post({ type: 'kaios:launch', manifestURL: this.manifestURL }); };
+    KaiApp.prototype.close = function () { post({ type: 'kaios:close' }); };
+    KaiApp.prototype.uninstall = function () { return ok(mkRequest(), undefined); };
+    KaiApp.prototype.checkForUpdate = function () { return ok(mkRequest(), null); };
+    KaiApp.prototype.addEventListener = function () {};
+    KaiApp.prototype.removeEventListener = function () {};
+
+    var selfApp = new KaiApp(INFO.manifest, INFO.manifestURL, INFO.origin);
+
+    try {
+      navigator.mozApps = {
+        getSelf: function () { return ok(mkRequest(), selfApp); },
+        getInstalled: function () { return ok(mkRequest(), [selfApp]); },
+        checkInstalled: function () { return ok(mkRequest(), selfApp); },
+        getSelfSync: function () { return selfApp; },
+        install: function (url, manifestUrl) {
+          post({ type: 'kaios:install', url: url, manifestUrl: manifestUrl });
+          return ok(mkRequest(), selfApp);
+        }
+      };
+    } catch (e) { /* navigator frozen — ignore */ }
+
+    /* ---------------- system message handlers ---------------- */
+    var handlers = {};
+    function setMessageHandler(type, fn) {
+      if (typeof fn === 'function') handlers[type] = fn;
+      else delete handlers[type];
+    }
+    W.mozSetMessageHandler = setMessageHandler;
+    try { navigator.mozSetMessageHandler = setMessageHandler; } catch (e) {}
+
+    W.mozHasPendingMessage = function () { return false; };
+    try { navigator.mozHasPendingMessage = W.mozHasPendingMessage; } catch (e) {}
+
+    W.addEventListener('message', function (e) {
+      var d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'kaios:message') return;
+      var h = handlers[d.name];
+      if (typeof h === 'function') {
+        try { h(d.data); } catch (err) { console.error(err); }
+      }
+    });
+
+    /* ---------------- navigator.getDeviceStorage ---------------- */
+    var storages = {};
+    function makeStorage(name) {
+      var files = Object.create(null);
+
+      function list(prefix) {
+        var out = [];
+        for (var k in files) {
+          if (!prefix || k.indexOf(prefix) === 0) {
+            out.push({
+              name: k, storageName: name,
+              lastModified: new Date(),
+              size: files[k] && files[k].size || 0
+            });
+          }
+        }
+        return out;
+      }
+
+      var api = {
+        storageName: name,
+        onchange: null,
+        available: function () { return ok(mkRequest(), 'available'); },
+        freeSpace: function () { return ok(mkRequest(), 64 * 1024 * 1024); },
+        usedSpace: function () { return ok(mkRequest(), 0); },
+        add: function (n, blob) { files[n] = blob; return ok(mkRequest(), n); },
+        addNamed: function (blob, n) { return api.add(n, blob); },
+        get: function (n) {
+          var r = mkRequest();
+          return (n in files) ? ok(r, files[n]) : fail(r, { name: 'NotFoundError', message: String(n) });
+        },
+        getEditable: function (n) { return api.get(n); },
+        'delete': function (n) { delete files[n]; return ok(mkRequest(), undefined); },
+        enumerate: function (prefix) { return ok(mkRequest(), mkCursor(list(prefix))); },
+        enumerateEditable: function (prefix) { return api.enumerate(prefix); }
+      };
+      return api;
+    }
+
+    try {
+      navigator.getDeviceStorage = function (name) {
+        name = String(name || 'sdcard');
+        if (!storages[name]) storages[name] = makeStorage(name);
+        return storages[name];
+      };
+    } catch (e) {}
+
+    /* ---------------- MozActivity ---------------- */
+    W.MozActivity = function (cfg) {
+      var self = this;
+      this.source = (cfg && cfg.source) || {};
+      this.onsuccess = null;
+      this.onerror = null;
+      post({
+        type: 'kaios:activity',
+        name: (cfg && cfg.name) || '',
+        detail: (cfg && cfg.data) || {}
+      });
+      defer(function () {
+        if (typeof self.onsuccess === 'function') self.onsuccess({ type: 'success', target: self });
+      });
+    };
+
+    /* ---------------- window.close() ---------------- */
+    W.close = function () { post({ type: 'kaios:close' }); };
+
+    /* ---------------- physical key  ->  KaiOS key ---------------- */
+    var KEYMAP = {
+      '*': 'SoftLeft',        // LSK
+      '#': 'SoftRight',       // RSK
+      'ArrowUp': 'ArrowUp', 'ArrowDown': 'ArrowDown',
+      'ArrowLeft': 'ArrowLeft', 'ArrowRight': 'ArrowRight',
+      'Enter': 'Enter',
+      'Backspace': 'Backspace',
+      'Escape': 'Backspace',  // Back
+      // desktop conveniences
+      'F1': 'SoftLeft', 'F2': 'SoftRight'
+    };
+    for (var d = 0; d <= 9; d++) KEYMAP[String(d)] = String(d);
+
+    var synthesizing = false;
+
+    function onKey(e) {
+      if (synthesizing) return;
+
+      var mapped = KEYMAP[e.key];
+      if (!mapped) return;          // not a KaiOS key — let it through
+      if (mapped === e.key) return; // identity mapping — native behaviour is correct
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      var target = document.activeElement || document.body || document.documentElement;
+      synthesizing = true;
+      try {
+        target.dispatchEvent(new KeyboardEvent(e.type, {
+          key: mapped,
+          code: mapped,
+          bubbles: true,
+          cancelable: true,
+          view: W,
+          repeat: e.repeat,
+          ctrlKey: e.ctrlKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+          metaKey: e.metaKey
+        }));
+      } catch (err) {
+        console.error(err);
+      }
+      synthesizing = false;
+    }
+
+    W.addEventListener('keydown', onKey, true);
+    W.addEventListener('keyup', onKey, true);
+
+    /* ---------------- keep the frame focused ---------------- */
+    W.addEventListener('blur', function () {
+      defer(function () {
+        if (typeof document.hasFocus === 'function' && document.hasFocus()) return;
+        try { W.focus(); } catch (e) {}
+      });
+    });
+  }
+
+  /* =====================================================================
+     Package -> runnable app
+     ===================================================================== */
+  async function buildApp(files, opts) {
+    const manifestPath = opts.manifestPath || null;
+    let manifest = {};
+    let baseDir = '';
+    let entryPath = null;
+
+    if (manifestPath && files.has(manifestPath)) {
+      baseDir = dirname(manifestPath);
+      try {
+        manifest = JSON.parse(await files.get(manifestPath).text());
+      } catch (e) {
+        console.warn('[runner] manifest.webapp is not valid JSON', e);
+        manifest = {};
+      }
+      const lp = manifest.launch_path || manifest.launchPath || '/index.html';
+      let candidate = resolvePath(baseDir, lp);
+      if (candidate) candidate = findCI(files, candidate);
+      if (candidate) entryPath = candidate;
+    }
+
+    if (!entryPath) {
+      const htmls = [...files.keys()]
+        .filter(p => /\.html?$/i.test(p))
+        .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+      entryPath = htmls[0] || null;
+    }
+    if (!entryPath) throw new Error('No HTML entry point found in this package.');
+    if (!baseDir) baseDir = dirname(entryPath);
+
+    const urls = new Map();     // path -> blob: URL
+    const created = [];         // for later revoking
+    const mk = blob => {
+      const u = URL.createObjectURL(blob);
+      created.push(u);
+      return u;
+    };
+
+    /* --- pass A: binary / script assets --- */
+    for (const [p, blob] of files) {
+      if (/\.(css|html?)$/i.test(p)) continue;
+      urls.set(p, mk(blob));
+    }
+
+    /* --- pass B: stylesheets (url() / @import resolved) --- */
+    for (const [p, blob] of files) {
+      if (!/\.css$/i.test(p)) continue;
+      const css = rewriteCss(await blob.text(), dirname(p), urls, baseDir);
+      urls.set(p, mk(new Blob([css], { type: 'text/css;charset=utf-8' })));
+    }
+
+    /* --- pass C: documents (assets resolved + shim injected on the entry) --- */
+    const appSlug = slug(manifest.name || opts.sourceName || 'app');
+    const appInfo = {
+      manifest: manifest,
+      manifestURL: 'app://' + appSlug + '/manifest.webapp',
+      origin: 'app://' + appSlug
+    };
+
+    let entryUrl = null;
+    let entryHtml = null;
+
+    for (const [p, blob] of files) {
+      if (!/\.html?$/i.test(p)) continue;
+      const isEntry = p === entryPath;
+      const html = rewriteHtml(
+        await blob.text(), dirname(p), urls, baseDir,
+        isEntry ? appInfo : null
+      );
+      const url = mk(new Blob([html], { type: 'text/html;charset=utf-8' }));
+      urls.set(p, url);
+      if (isEntry) { entryUrl = url; entryHtml = html; }
+    }
+
+    if (!entryUrl) throw new Error('Entry document could not be prepared.');
+
+    return {
+      entryUrl, entryHtml, urls: created,
+      manifest, entryPath, sourceName: opts.sourceName || entryPath
+    };
+  }
+
+  /* =====================================================================
+     JSZip lazy loader
+     ===================================================================== */
+  let jszipPromise = null;
+  function loadJSZip() {
+    if (window.JSZip) return Promise.resolve(window.JSZip);
+    if (jszipPromise) return jszipPromise;
+    jszipPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = JSZIP_URL;
+      s.onload = () => window.JSZip ? resolve(window.JSZip) : reject(new Error('JSZip unavailable'));
+      s.onerror = () => reject(new Error('Could not fetch JSZip (offline?)'));
+      document.head.appendChild(s);
+    });
+    return jszipPromise;
+  }
+
+  /* =====================================================================
+     File ingestion
+     ===================================================================== */
+  async function openFile(file) {
+    if (!file || busy) return;
+    busy = true;
+    setControlsDisabled(true);
+
+    if (!current) showHint('Unpacking…', file.name);
+
+    try {
+      const name = file.name || 'app';
+      const lower = name.toLowerCase();
+      const files = new Map();
+      let manifestPath = null;
+
+      if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+        files.set(name, new Blob([await file.text()], { type: 'text/html;charset=utf-8' }));
+      } else {
+        const JSZip = await loadJSZip();
+        const zip = await JSZip.loadAsync(file);
+
+        const entries = [];
+        zip.forEach((path, entry) => {
+          if (entry.dir) return;
+          if (path.startsWith('__MACOSX/')) return;
+          const base = path.split('/').pop();
+          if (base === '.DS_Store' || base === 'Thumbs.db') return;
+          entries.push([path, entry]);
+        });
+        if (!entries.length) throw new Error('Archive is empty.');
+
+        for (const [path, entry] of entries) {
+          const p = normalizePath(path);
+          const data = await entry.async('blob');
+          files.set(p, new Blob([data], { type: mimeFor(p) }));
+        }
+        manifestPath = findManifest(files);
+      }
+
+      const built = await buildApp(files, { manifestPath, sourceName: name });
+      mount(built);
+
+    } catch (err) {
+      console.error('[runner]', err);
+      if (!current) {
+        showHint('Could not load', String((err && err.message) || err), true);
+      }
+    } finally {
+      busy = false;
+      setControlsDisabled(false);
+    }
+  }
+
+  function findManifest(files) {
+    let best = null;
+    for (const p of files.keys()) {
+      if (!p.toLowerCase().endsWith('manifest.webapp')) continue;
+      if (!best || p.split('/').length < best.split('/').length) best = p;
+    }
+    return best;
+  }
+
+  /* =====================================================================
+     Mount / reload / eject
+     ===================================================================== */
+  function mount(built) {
+    if (current) revokeAll(current.urls);
+
+    current = built;
+    frame.src = built.entryUrl;
+
+    hint.classList.add('hidden');
+    hint.classList.remove('err');
+    btnReload.disabled = false;
+    btnEject.disabled = false;
+  }
+
+  function reload() {
+    if (!current || busy) return;
+    const oldUrl = current.entryUrl;
+    const url = URL.createObjectURL(
+      new Blob([current.entryHtml], { type: 'text/html;charset=utf-8' })
+    );
+    current.urls.push(url);
+    current.entryUrl = url;
+    frame.src = url;
+    setTimeout(() => { try { URL.revokeObjectURL(oldUrl); } catch (e) {} }, 1500);
+  }
+
+  function eject() {
+    if (!current) return;
+    const urls = current.urls;
+    current = null;
+
+    frame.src = 'about:blank';
+    setTimeout(() => revokeAll(urls), 500);
+
+    btnReload.disabled = true;
+    btnEject.disabled = true;
+    showHint('No app loaded', 'Press Load and pick a .zip, .omni or .html file');
+  }
+
+  function revokeAll(urls) {
+    (urls || []).forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} });
+  }
+
+  /* =====================================================================
+     Screen hint
+     ===================================================================== */
+  function showHint(title, sub, isError) {
+    hint.innerHTML = '';
+    const b = document.createElement('b');
+    b.textContent = title;
+    const s = document.createElement('span');
+    s.textContent = sub || '';
+    hint.append(b, s);
+    hint.classList.toggle('err', !!isError);
+    hint.classList.remove('hidden');
+  }
+
+  function setControlsDisabled(loading) {
+    btnLoad.disabled = loading;
+    if (loading) {
+      btnReload.disabled = true;
+      btnEject.disabled = true;
+    } else {
+      btnReload.disabled = !current;
+      btnEject.disabled = !current;
+    }
+  }
+
+  /* =====================================================================
+     Focus lock — keep keyboard input inside the frame
+     ===================================================================== */
+  function focusFrame() {
+    if (!current) return;
+    try {
+      frame.focus();
+      if (frame.contentWindow) frame.contentWindow.focus();
+    } catch (e) { /* cross-origin guard */ }
+  }
+
+  // If focus ever escapes to the host chrome, pull it straight back.
+  document.addEventListener('keydown', function (e) {
+    if (!current) return;
+    if (document.activeElement === frame) return;
+    focusFrame();
+  }, true);
+
+  // Clicking anywhere on the screen re-arms the frame.
+  document.getElementById('screen').addEventListener('pointerdown', function () {
+    setTimeout(focusFrame, 0);
+  });
+
+  frame.addEventListener('load', function () {
+    if (!current) return;
+    focusFrame();
+  });
+
+  /* =====================================================================
+     Messages coming back out of the frame
+     ===================================================================== */
+  window.addEventListener('message', function (e) {
+    const d = e.data;
+    if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
+    if (d.type.indexOf('kaios:') !== 0) return;
+
+    switch (d.type) {
+      case 'kaios:close':          // app called window.close()
+        eject();
+        break;
+      case 'kaios:launch':
+        console.info('[mozApps] launch', d.manifestURL);
+        break;
+      case 'kaios:install':
+        console.info('[mozApps] install', d.url, d.manifestUrl);
+        break;
+      case 'kaios:activity':
+        console.info('[MozActivity]', d.name, d.detail);
+        break;
+    }
+  });
+
+  /* =====================================================================
+     Wiring
+     ===================================================================== */
+  btnLoad.addEventListener('click', () => fileInput.click());
+  btnReload.addEventListener('click', reload);
+  btnEject.addEventListener('click', eject);
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (f) openFile(f);
+  });
+
+  // drag & drop onto the window
+  ['dragenter', 'dragover'].forEach(t =>
+    document.addEventListener(t, e => { e.preventDefault(); })
+  );
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) openFile(f);
+  });
+
+  /* init */
+  setControlsDisabled(false);
+})();
+</script>
 </body>
 </html>
