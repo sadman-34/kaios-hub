@@ -624,12 +624,18 @@
 
       if (lower.endsWith('.html') || lower.endsWith('.htm')) {
         files.set(name, new Blob([await file.text()], { type: 'text/html;charset=utf-8' }));
-      } else {
-        const JSZip = await loadJSZip();
-        const zip = await JSZip.loadAsync(file);
+              } else {
+          const JSZip = await loadJSZip();
+          let zip = await JSZip.loadAsync(file);
 
-        const entries = [];
-        zip.forEach((path, entry) => {
+          // Auto-unwrap KaiOS store packages (application.zip)
+          if (zip.files['application.zip'] && !zip.files['application.zip'].dir) {
+            const innerData = await zip.files['application.zip'].async('blob');
+            zip = await JSZip.loadAsync(innerData);
+          }
+
+          const entries = [];
+          zip.forEach((path, entry) => {
           if (entry.dir) return;
           if (path.startsWith('__MACOSX/')) return;
           const base = path.split('/').pop();
