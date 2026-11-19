@@ -531,7 +531,10 @@
         .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
       entryPath = htmls[0] || null;
     }
-    if (!entryPath) throw new Error('No HTML entry point found in this package.');
+        if (!entryPath) {
+      const found = Array.from(files.keys()).slice(0, 20).join(', ');
+      throw new Error('No HTML found. Contains: ' + found);
+    }
     if (!baseDir) baseDir = dirname(entryPath);
 
     const urls = new Map();     // path -> blob: URL
