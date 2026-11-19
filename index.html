@@ -425,6 +425,44 @@
     } catch (e) {}
 
     /* ---------------- MozActivity ---------------- */
+    /* ---------------- Fake Service Worker ---------------- */
+    try {
+      if (!navigator.serviceWorker) {
+        navigator.serviceWorker = {
+          register: function () { return Promise.resolve({ scope: '/' }); },
+          getRegistration: function () { return Promise.resolve(undefined); },
+          ready: Promise.resolve({ active: {} }),
+          addEventListener: function () {}, removeEventListener: function () {}
+        };
+      }
+    } catch (e) {}
+
+    /* ---------------- Catch Silent Promise Errors ---------------- */
+    W.addEventListener('unhandledrejection', function (e) {
+      post({
+        type: 'kaios:error',
+        message: 'Promise Error: ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason))
+      });
+    });
+
+    /* ---------------- Fix Local File Fetching ---------------- */
+    var URLS = INFO.urls || {};
+    var origFetch = W.fetch;
+    W.fetch = function (input, init) {
+      if (typeof input === 'string') {
+        var clean = input.replace(/^\.\//, '').replace(/^\//, '');
+        if (URLS[clean]) input = URLS[clean];
+      }
+      return origFetch.call(W, input, init);
+    };
+    var origXHR = W.XMLHttpRequest.prototype.open;
+    W.XMLHttpRequest.prototype.open = function (method, url, async, user, password) {
+      if (typeof url === 'string') {
+        var clean = url.replace(/^\.\//, '').replace(/^\//, '');
+        if (URLS[clean]) url = URLS[clean];
+      }
+      return origXHR.call(this, method, url, async, user, password);
+    };
         /* ---------------- catch app crashes ---------------- */
     W.addEventListener('error', function (e) {
       post({
@@ -569,11 +607,16 @@
 
     /* --- pass C: documents (assets resolved + shim injected on the entry) --- */
     const appSlug = slug(manifest.name || opts.sourceName || 'app');
-    const appInfo = {
+        const appInfo = {
       manifest: manifest,
       manifestURL: 'app://' + appSlug + '/manifest.webapp',
-      origin: 'app://' + appSlug
+      origin: 'app://' + appSlug,
+      urls: {}
     };
+
+    for (const [k, v] of urls) {
+      appInfo.urls[k] = v;
+    }
 
     let entryUrl = null;
     let entryHtml = null;
