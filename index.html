@@ -40,6 +40,14 @@
   #hint.err b{color:var(--danger)}
 
   /* ---------- controls (outside the screen) ---------- */
+  #log-overlay {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    max-height: 90px; overflow-y: auto;
+    background: rgba(0,0,0,0.85); color: #0f0;
+    font-family: monospace; font-size: 10px; padding: 4px;
+    pointer-events: none; display: none; z-index: 100;
+    word-wrap: break-word; border-top: 1px solid #333;
+  }
   #controls{display:flex; gap:8px}
   button{
     font:inherit; font-size:12px; font-weight:500;
@@ -87,7 +95,9 @@
   const btnReload = document.getElementById('btnReload');
   const btnEject  = document.getElementById('btnEject');
   const fileInput = document.getElementById('file');
-
+  const logOverlay = document.createElement('div');
+  logOverlay.id = 'log-overlay';
+  document.getElementById('screen').appendChild(logOverlay);
   const JSZIP_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
 
   /** @type {{entryUrl:string, entryHtml:string, urls:string[], manifest:object, entryPath:string, sourceName:string}|null} */
@@ -453,6 +463,12 @@
         addObserver: function () {}
       };
     }
+	    /* ---------------- Force Visibility ---------------- */
+    try {
+      Object.defineProperty(document, 'hidden', { value: false, writable: false });
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
+      window.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+    } catch(e) {}
     /* ---------------- Fake Service Worker ---------------- */
     try {
       if (!navigator.serviceWorker) {
@@ -867,7 +883,11 @@
     if (d.type.indexOf('kaios:') !== 0) return;
 
     switch (d.type) {
-	      case 'kaios:log':
+      case 'kaios:log':
+        logOverlay.style.display = 'block';
+        logOverlay.textContent += d.msg + '\n';
+        logOverlay.scrollTop = logOverlay.scrollHeight;
+        break;
         showHint('App Log', d.msg);
         break;
       case 'kaios:error':
