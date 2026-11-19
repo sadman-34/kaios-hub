@@ -425,7 +425,16 @@
     } catch (e) {}
 
     /* ---------------- MozActivity ---------------- */
-    W.MozActivity = function (cfg) {
+        /* ---------------- catch app crashes ---------------- */
+    W.addEventListener('error', function (e) {
+      post({
+        type: 'kaios:error',
+        message: e.message || 'Unknown script error',
+        filename: e.filename || '',
+        lineno: e.lineno || 0
+      });
+    });
+	W.MozActivity = function (cfg) {
       var self = this;
       this.source = (cfg && cfg.source) || {};
       this.onsuccess = null;
@@ -781,7 +790,11 @@
     if (d.type.indexOf('kaios:') !== 0) return;
 
     switch (d.type) {
-      case 'kaios:close':          // app called window.close()
+      case 'kaios:error':
+        // If the app crashes, show the error on the screen
+        showHint('App Crashed', d.message + ' (Line ' + d.lineno + ')', true);
+        break;
+	  case 'kaios:close':          // app called window.close()
         eject();
         break;
       case 'kaios:launch':
