@@ -425,6 +425,34 @@
     } catch (e) {}
 
     /* ---------------- MozActivity ---------------- */
+    /* ---------------- Fake mozL10n (Language) ---------------- */
+    if (!navigator.mozL10n) {
+      navigator.mozL10n = {
+        get: function (key) { return key; },
+        setLanguage: function () { return Promise.resolve(); },
+        ready: Promise.resolve(),
+        once: function () { return Promise.resolve(); },
+        language: { code: 'en-US', direction: 'ltr' }
+      };
+    }
+    W.mozL10n = navigator.mozL10n;
+
+    /* ---------------- Fake mozSettings ---------------- */
+    if (!navigator.mozSettings) {
+      navigator.mozSettings = {
+        createLock: function () {
+          return {
+            get: function (key) {
+              var r = mkRequest();
+              var res = {}; res[key] = null;
+              return ok(r, res);
+            },
+            set: function (obj) { return ok(mkRequest(), undefined); }
+          };
+        },
+        addObserver: function () {}
+      };
+    }
     /* ---------------- Fake Service Worker ---------------- */
     try {
       if (!navigator.serviceWorker) {
@@ -463,6 +491,12 @@
       }
       return origXHR.call(this, method, url, async, user, password);
     };
+    var origLog = console.log;
+    console.log = function () {
+      var msg = Array.prototype.slice.call(arguments).join(' ');
+      post({ type: 'kaios:log', msg: msg });
+      origLog.apply(console, arguments);
+    };	
         /* ---------------- catch app crashes ---------------- */
     W.addEventListener('error', function (e) {
       post({
@@ -833,6 +867,9 @@
     if (d.type.indexOf('kaios:') !== 0) return;
 
     switch (d.type) {
+	      case 'kaios:log':
+        showHint('App Log', d.msg);
+        break;
       case 'kaios:error':
         // If the app crashes, show the error on the screen
         showHint('App Crashed', d.message + ' (Line ' + d.lineno + ')', true);
